@@ -1,0 +1,29 @@
+
+{
+  "name": "CampusFlow - Campus Compass Guide",
+  "short_name": "CampusFlow",
+  "description": "Your Campus Compass Guide - Navigate your campus with ease",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logobg.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logobg.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "navigation", "productivity"],
+  "lang": "en",
+  "scope": "/",
+  "prefer_related_applications": false
+}
