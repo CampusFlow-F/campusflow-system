@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,13 +6,21 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Calendar, Clock, MapPin, Plus } from "lucide-react";
+import { Calendar, Clock, MapPin, Plus, Pencil, Trash2 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { Tables } from "@/integrations/supabase/types";
 
+import { Dialog as StudyRoomDialog, DialogContent as StudyRoomDialogContent, DialogHeader as StudyRoomDialogHeader, DialogTitle as StudyRoomDialogTitle } from "@/components/ui/dialog";
+
 type Schedule = Tables<"schedules">;
+
+const studyRooms = [
+  { name: "Science Building Room 210", location: "Science Building, 2nd Floor", capacity:8 },
+  { name: "Engineering Study Lounge", location: "Engineering Block, Ground Floor", capacity: 10 },
+  { name: "Main Hall Study Area", location: "Main Hall, 3rd Floor", capacity: 12 },
+];
 
 const ScheduleViewer = () => {
   const { user } = useAuth();
@@ -22,6 +29,8 @@ const ScheduleViewer = () => {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [newSchedule, setNewSchedule] = useState({
     course: "",
     time: "",
@@ -30,6 +39,9 @@ const ScheduleViewer = () => {
     type: "Lecture",
     day_of_week: "monday"
   });
+  const [editSchedule, setEditSchedule] = useState<Schedule | null>(null);
+  const [deleteScheduleId, setDeleteScheduleId] = useState<number | null>(null);
+  const [isStudyRoomDialogOpen, setIsStudyRoomDialogOpen] = useState(false);
 
   const days = [
     { key: "monday", label: "Monday" },
@@ -110,6 +122,77 @@ const ScheduleViewer = () => {
       fetchSchedules();
     } catch (error) {
       console.error('Error adding schedule:', error);
+    }
+  };
+
+  const handleEditSchedule = async () => {
+    if (!editSchedule || !user) return;
+
+    try {
+      const { error } = await supabase
+        .from('schedules')
+        .update({
+          course: editSchedule.course,
+          time: editSchedule.time,
+          location: editSchedule.location,
+          instructor: editSchedule.instructor,
+          type: editSchedule.type,
+          day_of_week: editSchedule.day_of_week
+        })
+        .eq('id', editSchedule.id)
+        .eq('user_id', user.id);
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to update schedule",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Success",
+        description: "Schedule updated successfully!",
+      });
+
+      setIsEditDialogOpen(false);
+      setEditSchedule(null);
+      fetchSchedules();
+    } catch (error) {
+      console.error('Error updating schedule:', error);
+    }
+  };
+
+  const handleDeleteSchedule = async () => {
+    if (!deleteScheduleId || !user) return;
+
+    try {
+      const { error } = await supabase
+        .from('schedules')
+        .delete()
+        .eq('id', deleteScheduleId)
+        .eq('user_id', user.id);
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to delete schedule",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Success",
+        description: "Schedule deleted successfully!",
+      });
+
+      setIsDeleteDialogOpen(false);
+      setDeleteScheduleId(null);
+      fetchSchedules();
+    } catch (error) {
+      console.error('Error deleting schedule:', error);
     }
   };
 
@@ -269,10 +352,30 @@ const ScheduleViewer = () => {
                     <span className="text-sm text-muted-foreground">
                       {class_item.instructor}
                     </span>
-                    <Button size="sm" variant="outline">
-                      <MapPin className="mr-2 h-3 w-3" />
-                      Navigate
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setEditSchedule(class_item);
+                          setIsEditDialogOpen(true);
+                        }}
+                      >
+                        <Pencil className="mr-1 h-3 w-3" />
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          setDeleteScheduleId(class_item.id);
+                          setIsDeleteDialogOpen(true);
+                        }}
+                      >
+                        <Trash2 className="mr-1 h-3 w-3" />
+                        Delete
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -291,13 +394,151 @@ const ScheduleViewer = () => {
         )}
       </div>
 
+      {/* Edit Schedule Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Schedule</DialogTitle>
+            <DialogDescription>
+              Update your class details
+            </DialogDescription>
+          </DialogHeader>
+          {editSchedule && (
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="edit-course">Course Name</Label>
+                <Input
+                  id="edit-course"
+                  value={editSchedule.course}
+                  onChange={(e) => setEditSchedule({ ...editSchedule, course: e.target.value })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="edit-time">Time</Label>
+                  <Input
+                    id="edit-time"
+                    value={editSchedule.time}
+                    onChange={(e) => setEditSchedule({ ...editSchedule, time: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="edit-day">Day</Label>
+                  <Select value={editSchedule.day_of_week} onValueChange={(value) => setEditSchedule({ ...editSchedule, day_of_week: value })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {days.map((day) => (
+                        <SelectItem key={day.key} value={day.key}>
+                          {day.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="edit-location">Location</Label>
+                <Input
+                  id="edit-location"
+                  value={editSchedule.location}
+                  onChange={(e) => setEditSchedule({ ...editSchedule, location: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label htmlFor="edit-instructor">Instructor</Label>
+                <Input
+                  id="edit-instructor"
+                  value={editSchedule.instructor}
+                  onChange={(e) => setEditSchedule({ ...editSchedule, instructor: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label htmlFor="edit-type">Type</Label>
+                <Select value={editSchedule.type} onValueChange={(value) => setEditSchedule({ ...editSchedule, type: value })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Lecture">Lecture</SelectItem>
+                    <SelectItem value="Tutorial">Tutorial</SelectItem>
+                    <SelectItem value="Lab">Lab</SelectItem>
+                    <SelectItem value="Seminar">Seminar</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex justify-end space-x-2">
+                <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleEditSchedule}>
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Schedule</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this schedule? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end space-x-2 mt-4">
+            <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteSchedule}>
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Quick Actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Button variant="outline">Export Schedule</Button>
         <Button variant="outline">Add to Calendar</Button>
-        <Button variant="outline">Find Study Rooms</Button>
+        <Button variant="outline" onClick={() => setIsStudyRoomDialogOpen(true)}>
+          Find Study Rooms
+        </Button>
         <Button variant="outline">Set Reminders</Button>
       </div>
+
+      {/* Study Room Dialog */}
+      <StudyRoomDialog open={isStudyRoomDialogOpen} onOpenChange={setIsStudyRoomDialogOpen}>
+        <StudyRoomDialogContent className="w-full max-w-md mx-auto rounded-lg shadow-lg p-4">
+          <StudyRoomDialogHeader>
+            <StudyRoomDialogTitle>Available Study Rooms</StudyRoomDialogTitle>
+          </StudyRoomDialogHeader>
+          <div className="space-y-4 mt-2">
+            {studyRooms.map((room, idx) => (
+              <Card key={idx}>
+                <CardHeader>
+                  <CardTitle className="text-base">{room.name}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs text-muted-foreground">{room.location}</span>
+                    <span className="text-xs">Capacity: {room.capacity}</span>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <div className="flex justify-end mt-4">
+            <Button variant="outline" onClick={() => setIsStudyRoomDialogOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </StudyRoomDialogContent>
+      </StudyRoomDialog>
     </div>
   );
 };
