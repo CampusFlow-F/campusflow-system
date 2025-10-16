@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,9 +22,23 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Default campus location (you can customize this)
+  // Refs for directions
+  const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
+  const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
+
+  // Default campus location (SPU Main Campus)
   const defaultCenter = center || { lat: -28.749074808736683, lng: 24.764687436813688 };
-  
+
+  // Residence locations
+  const residenceLocations = [
+    { id: 'mohudi', name: 'Mohudi Hall of Residence', position: { lat: -28.739074808736683, lng: 24.774687436813688 } },
+    { id: 'rathaga', name: 'Rathaga Hall of Residence', position: { lat: -28.738583, lng: 24.767672 } },
+   
+
+
+    { id: 'south-campus', name: 'South Campus Residence', position: { lat: -28.7525882, lng: 24.7551688 } },
+    { id: 'luka-jantjie', name: 'Luka Jantjie Hall', position: { lat: -28.7444316, lng: 24.763953 } }
+  ];
 
   useEffect(() => {
     getCurrentLocation();
@@ -37,6 +50,7 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
     } else {
       loadGoogleMapsScript();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userLocation]);
 
   const getCurrentLocation = () => {
@@ -67,6 +81,7 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
     }
 
     const script = document.createElement('script');
+    // Replace the API key with env variable in production
     script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyDFoCMVMXy7OpiF9VkM6Lb2oKpl2oeAv9k&libraries=places`;
     script.async = true;
     script.defer = true;
@@ -83,7 +98,7 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
 
     try {
       const mapCenter = userLocation || defaultCenter;
-      
+
       const newMap = new google.maps.Map(mapRef.current, {
         center: mapCenter,
         zoom: zoom,
@@ -97,6 +112,14 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
       });
 
       setMap(newMap);
+
+      // Initialize Directions service + renderer and attach to map
+      directionsServiceRef.current = new google.maps.DirectionsService();
+      directionsRendererRef.current = new google.maps.DirectionsRenderer({
+        map: newMap,
+        suppressMarkers: false,
+        polylineOptions: { strokeWeight: 6 }
+      });
 
       // Add user location marker if available
       if (userLocation) {
@@ -125,7 +148,6 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
         { id: 'clinic', position: { lat: defaultCenter.lat, lng: defaultCenter.lng + 0.003 }, title: 'Health Clinic', info: 'Medical services and support' }
       ];
 
-      // Add building markers
       campusMarkers.forEach(marker => {
         const mapMarker = new google.maps.Marker({
           position: marker.position,
@@ -142,13 +164,48 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
           }
         });
 
-        // Add info window
         const infoWindow = new google.maps.InfoWindow({
           content: `<div style="padding: 8px;"><h3 style="margin: 0 0 4px 0; font-weight: bold;">${marker.title}</h3><p style="margin: 0; color: #666;">${marker.info}</p></div>`
         });
 
         mapMarker.addListener('click', () => {
           infoWindow.open(newMap, mapMarker);
+        });
+      });
+
+      // Add residence markers and attach click listener to start navigation
+      residenceLocations.forEach(residence => {
+        const residenceMarker = new google.maps.Marker({
+          position: residence.position,
+          map: newMap,
+          title: residence.name,
+          icon: {
+            url: 'data:image/svg+xml;base64,' + btoa(`
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="blue" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                <polyline points="9 22 9 12 15 12 15 22"/>
+              </svg>
+            `),
+            scaledSize: new google.maps.Size(32, 32)
+          }
+        });
+
+        // Info window with a button
+        const infoWindow = new google.maps.InfoWindow({
+          content: `<div style="padding: 8px;">
+            <h3 style="margin: 0 0 4px 0; font-weight: bold;">${residence.name}</h3>
+            <p style="margin: 0 0 8px 0; color: #666;">Student Residence</p>
+            <button onclick="window.navigateToCampusFromResidence('${residence.id}')" 
+                    style="padding: 6px 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              Navigate to SPU Main Campus
+            </button>
+          </div>`
+        });
+
+        residenceMarker.addListener('click', () => {
+          infoWindow.open(newMap, residenceMarker);
+          // trigger navigation when the marker is clicked
+          navigateToCampusFromResidence(residence.id);
         });
       });
 
@@ -169,6 +226,94 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
     }
   };
 
+  // Main navigation function: requests directions from residence -> SPU Main Campus
+  const navigateToCampusFromResidence = (residenceId: string) => {
+    if (!map || !directionsServiceRef.current || !directionsRendererRef.current) return;
+
+    const residence = residenceLocations.find(r => r.id === residenceId);
+    if (!residence) return;
+
+    // Clear previous directions
+    directionsRendererRef.current.set('directions', null);
+
+    const origin = residence.position;
+    const destination = defaultCenter;
+
+    const request: google.maps.DirectionsRequest = {
+      origin,
+      destination,
+      travelMode: google.maps.TravelMode.WALKING,
+      drivingOptions: {
+        departureTime: new Date()
+      },
+      unitSystem: google.maps.UnitSystem.METRIC
+    };
+
+    directionsServiceRef.current.route(request, (result, status) => {
+      if (status === google.maps.DirectionsStatus.OK && result) {
+        directionsRendererRef.current!.setDirections(result);
+
+        // fit map to route
+        const routeBounds = result.routes[0].bounds;
+        if (routeBounds) {
+          map.fitBounds(routeBounds);
+        } else {
+          map.setCenter(defaultCenter);
+        }
+
+        // Voice navigation announcement
+        speak(`Navigating from ${residence.name} to SPU Main Campus`);
+
+        toast({
+          title: "Navigation Started",
+          description: `Route from ${residence.name} to SPU Main Campus displayed.`,
+          variant: "default"
+        });
+      } else {
+        console.error('Directions request failed:', status);
+        toast({
+          title: "Navigation Error",
+          description: `Unable to get route. (${status})`,
+          variant: "destructive"
+        });
+      }
+    });
+  };
+
+  // Expose navigation function to global after it's defined (fixes earlier timing bug)
+  useEffect(() => {
+    (window as any).navigateToCampusFromResidence = navigateToCampusFromResidence;
+    return () => {
+      (window as any).navigateToCampusFromResidence = undefined;
+    };
+  }, [navigateToCampusFromResidence, map]);
+
+  const clearRoute = () => {
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.set('directions', null);
+      toast({
+        title: "Route cleared",
+        description: "The current route has been removed.",
+        variant: "default"
+      });
+      // re-center map to campus after clearing
+      if (map) map.setCenter(defaultCenter);
+    }
+  };
+
+  const speak = (text: string) => {
+    if ('speechSynthesis' in window) {
+      const speech = new SpeechSynthesisUtterance();
+      speech.text = text;
+      speech.volume = 1;
+      speech.rate = 1;
+      speech.pitch = 1;
+      window.speechSynthesis.speak(speech);
+    } else {
+      console.warn('Speech synthesis not supported');
+    }
+  };
+
   if (error) {
     return (
       <Card>
@@ -186,18 +331,36 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row gap-2">
+      <div className="flex flex-col sm:flex-row gap-2 flex-wrap">
         <Button onClick={centerOnUser} variant="outline" className="gap-2">
           <Navigation className="h-4 w-4" />
           Center on My Location
         </Button>
+
+        {/* Residence Navigation Buttons */}
+        {residenceLocations.map((residence) => (
+          <Button
+            key={residence.id}
+            onClick={() => navigateToCampusFromResidence(residence.id)}
+            variant="outline"
+            className="gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+          >
+            <MapPin className="h-4 w-4" />
+            {residence.name}
+          </Button>
+        ))}
+
+        {/* Clear route button */}
+        <Button onClick={clearRoute} variant="ghost" className="gap-2 text-sm">
+          Clear Route
+        </Button>
       </div>
-      
+
       <Card>
         <CardContent className="p-0">
           <div className="relative">
-            <div 
-              ref={mapRef} 
+            <div
+              ref={mapRef}
               className="w-full h-64 md:h-80 lg:h-96 rounded-lg"
               style={{ minHeight: '300px' }}
             />
@@ -217,3 +380,4 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
 };
 
 export default GoogleMap;
+
