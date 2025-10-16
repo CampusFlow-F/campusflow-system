@@ -6,31 +6,25 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Calendar, Clock, MapPin, Plus, Pencil, Trash2 } from "lucide-react";
+import { Calendar, Clock, MapPin, Plus, User, Users } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { Tables } from "@/integrations/supabase/types";
 
-import { Dialog as StudyRoomDialog, DialogContent as StudyRoomDialogContent, DialogHeader as StudyRoomDialogHeader, DialogTitle as StudyRoomDialogTitle } from "@/components/ui/dialog";
-
 type Schedule = Tables<"schedules">;
-
-const studyRooms = [
-  { name: "Science Building Room 210", location: "Science Building, 2nd Floor", capacity:8 },
-  { name: "Engineering Study Lounge", location: "Engineering Block, Ground Floor", capacity: 10 },
-  { name: "Main Hall Study Area", location: "Main Hall, 3rd Floor", capacity: 12 },
-];
+type Timetable = Tables<"timetable">;
 
 const ScheduleViewer = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [selectedDay, setSelectedDay] = useState("monday");
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [timetable, setTimetable] = useState<Timetable[]>([]);
+  const [userClass, setUserClass] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"personal" | "lecturer" | "all">("all");
   const [newSchedule, setNewSchedule] = useState({
     course: "",
     time: "",
@@ -39,9 +33,6 @@ const ScheduleViewer = () => {
     type: "Lecture",
     day_of_week: "monday"
   });
-  const [editSchedule, setEditSchedule] = useState<Schedule | null>(null);
-  const [deleteScheduleId, setDeleteScheduleId] = useState<number | null>(null);
-  const [isStudyRoomDialogOpen, setIsStudyRoomDialogOpen] = useState(false);
 
   const days = [
     { key: "monday", label: "Monday" },
@@ -53,14 +44,46 @@ const ScheduleViewer = () => {
 
   useEffect(() => {
     if (user) {
-      fetchSchedules();
+      fetchUserData();
     }
   }, [user]);
+
+  const fetchUserData = async () => {
+    if (!user) return;
+
+    setIsLoading(true);
+    try {
+      // Get user's profile to determine class/department
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('department, role')
+        .eq('id', user.id)
+        .single();
+
+      if (profileData?.department) {
+        setUserClass(profileData.department);
+      }
+
+      // Fetch both personal schedules and lecturer timetable
+      await Promise.all([
+        fetchSchedules(),
+        fetchTimetable(profileData?.department)
+      ]);
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load schedule data",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const fetchSchedules = async () => {
     if (!user) return;
 
-    setIsLoading(true);
     try {
       const { data, error } = await supabase
         .from('schedules')
@@ -69,19 +92,38 @@ const ScheduleViewer = () => {
         .order('time');
 
       if (error) {
-        toast({
-          title: "Error",
-          description: "Failed to fetch schedules",
-          variant: "destructive",
-        });
+        console.error('Error fetching schedules:', error);
         return;
       }
 
       setSchedules(data || []);
     } catch (error) {
       console.error('Error fetching schedules:', error);
-    } finally {
-      setIsLoading(false);
+    }
+  };
+
+  const fetchTimetable = async (userClass?: string) => {
+    try {
+      let query = supabase
+        .from('timetable')
+        .select('*')
+        .order('start_time');
+
+      // If user has a class/department, filter by it
+      if (userClass) {
+        query = query.eq('class', userClass);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error fetching timetable:', error);
+        return;
+      }
+
+      setTimetable(data || []);
+    } catch (error) {
+      console.error('Error fetching timetable:', error);
     }
   };
 
@@ -125,78 +167,62 @@ const ScheduleViewer = () => {
     }
   };
 
-  const handleEditSchedule = async () => {
-    if (!editSchedule || !user) return;
+  // Filter schedules and timetable by selected day
+  const currentPersonalSchedules = schedules.filter(schedule => 
+    schedule.day_of_week.toLowerCase() === selectedDay
+  );
 
-    try {
-      const { error } = await supabase
-        .from('schedules')
-        .update({
-          course: editSchedule.course,
-          time: editSchedule.time,
-          location: editSchedule.location,
-          instructor: editSchedule.instructor,
-          type: editSchedule.type,
-          day_of_week: editSchedule.day_of_week
-        })
-        .eq('id', editSchedule.id)
-        .eq('user_id', user.id);
+  const currentTimetable = timetable.filter(classItem => 
+    classItem.day_of_week.toLowerCase() === selectedDay
+  );
 
-      if (error) {
-        toast({
-          title: "Error",
-          description: "Failed to update schedule",
-          variant: "destructive",
+  // Combine data based on view mode
+  const getDisplayData = () => {
+    switch (viewMode) {
+      case "personal":
+        return currentPersonalSchedules.map(item => ({
+          ...item,
+          type: 'personal' as const,
+          displayTime: item.time,
+          displaySubject: item.course,
+          displayLocation: item.location,
+          displayInstructor: item.instructor
+        }));
+      case "lecturer":
+        return currentTimetable.map(item => ({
+          ...item,
+          type: 'lecturer' as const,
+          displayTime: `${item.start_time} - ${item.end_time}`,
+          displaySubject: item.subject,
+          displayLocation: item.room,
+          displayInstructor: "Lecturer"
+        }));
+      case "all":
+      default:
+        const personal = currentPersonalSchedules.map(item => ({
+          ...item,
+          type: 'personal' as const,
+          displayTime: item.time,
+          displaySubject: item.course,
+          displayLocation: item.location,
+          displayInstructor: item.instructor
+        }));
+        const lecturer = currentTimetable.map(item => ({
+          ...item,
+          type: 'lecturer' as const,
+          displayTime: `${item.start_time} - ${item.end_time}`,
+          displaySubject: item.subject,
+          displayLocation: item.room,
+          displayInstructor: "Lecturer"
+        }));
+        return [...personal, ...lecturer].sort((a, b) => {
+          // Sort by time (simplified - you might want to parse times properly)
+          return a.displayTime.localeCompare(b.displayTime);
         });
-        return;
-      }
-
-      toast({
-        title: "Success",
-        description: "Schedule updated successfully!",
-      });
-
-      setIsEditDialogOpen(false);
-      setEditSchedule(null);
-      fetchSchedules();
-    } catch (error) {
-      console.error('Error updating schedule:', error);
     }
   };
 
-  const handleDeleteSchedule = async () => {
-    if (!deleteScheduleId || !user) return;
-
-    try {
-      const { error } = await supabase
-        .from('schedules')
-        .delete()
-        .eq('id', deleteScheduleId)
-        .eq('user_id', user.id);
-
-      if (error) {
-        toast({
-          title: "Error",
-          description: "Failed to delete schedule",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      toast({
-        title: "Success",
-        description: "Schedule deleted successfully!",
-      });
-
-      setIsDeleteDialogOpen(false);
-      setDeleteScheduleId(null);
-      fetchSchedules();
-    } catch (error) {
-      console.error('Error deleting schedule:', error);
-    }
-  };
-
-  const currentSchedule = schedules.filter(schedule => schedule.day_of_week === selectedDay);
+  const displayData = getDisplayData();
 
   const getTypeColor = (type: string) => {
     switch (type) {
@@ -208,337 +234,245 @@ const ScheduleViewer = () => {
     }
   };
 
+  const getScheduleTypeBadge = (type: 'personal' | 'lecturer') => {
+    return type === 'personal' 
+      ? { label: 'Personal', variant: 'default' as const, icon: User }
+      : { label: 'Class', variant: 'secondary' as const, icon: Users };
+  };
+
   if (isLoading) {
-    return <div className="text-center py-8">Loading schedules...</div>;
+    return (
+      <div className="text-center py-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+        <p>Loading schedules...</p>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
-      {/* Day Selector and Add Button */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      {/* View Mode Selector */}
+      <div className="flex flex-col gap-4">
         <div className="flex flex-wrap gap-2">
-          {days.map((day) => (
-            <Button
-              key={day.key}
-              variant={selectedDay === day.key ? "default" : "outline"}
-              onClick={() => setSelectedDay(day.key)}
-              className="flex items-center gap-2"
-            >
-              <Calendar className="h-4 w-4" />
-              {day.label}
-            </Button>
-          ))}
+          <Button
+            variant={viewMode === "all" ? "default" : "outline"}
+            onClick={() => setViewMode("all")}
+            className="flex items-center gap-2"
+          >
+            <Calendar className="h-4 w-4" />
+            All Schedules
+          </Button>
+          <Button
+            variant={viewMode === "personal" ? "default" : "outline"}
+            onClick={() => setViewMode("personal")}
+            className="flex items-center gap-2"
+          >
+            <User className="h-4 w-4" />
+            Personal Only
+          </Button>
+          <Button
+            variant={viewMode === "lecturer" ? "default" : "outline"}
+            onClick={() => setViewMode("lecturer")}
+            className="flex items-center gap-2"
+          >
+            <Users className="h-4 w-4" />
+            Class Schedule
+          </Button>
         </div>
-        
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Schedule
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Schedule</DialogTitle>
-              <DialogDescription>
-                Add a new class to your schedule
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="course">Course Name</Label>
-                <Input
-                  id="course"
-                  value={newSchedule.course}
-                  onChange={(e) => setNewSchedule({...newSchedule, course: e.target.value})}
-                  placeholder="e.g., Computer Science 101"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+
+        {/* Day Selector and Add Button */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap gap-2">
+            {days.map((day) => (
+              <Button
+                key={day.key}
+                variant={selectedDay === day.key ? "default" : "outline"}
+                onClick={() => setSelectedDay(day.key)}
+                className="flex items-center gap-2"
+              >
+                <Calendar className="h-4 w-4" />
+                {day.label}
+              </Button>
+            ))}
+          </div>
+          
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Personal Schedule
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add Personal Schedule</DialogTitle>
+                <DialogDescription>
+                  Add a personal event or reminder to your schedule
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
                 <div>
-                  <Label htmlFor="time">Time</Label>
+                  <Label htmlFor="course">Event Name</Label>
                   <Input
-                    id="time"
-                    value={newSchedule.time}
-                    onChange={(e) => setNewSchedule({...newSchedule, time: e.target.value})}
-                    placeholder="e.g., 09:00 - 10:30"
+                    id="course"
+                    value={newSchedule.course}
+                    onChange={(e) => setNewSchedule({...newSchedule, course: e.target.value})}
+                    placeholder="e.g., Study Group, Meeting, etc."
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="time">Time</Label>
+                    <Input
+                      id="time"
+                      value={newSchedule.time}
+                      onChange={(e) => setNewSchedule({...newSchedule, time: e.target.value})}
+                      placeholder="e.g., 09:00 - 10:30"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="day">Day</Label>
+                    <Select value={newSchedule.day_of_week} onValueChange={(value) => setNewSchedule({...newSchedule, day_of_week: value})}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {days.map((day) => (
+                          <SelectItem key={day.key} value={day.key}>
+                            {day.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="location">Location</Label>
+                  <Input
+                    id="location"
+                    value={newSchedule.location}
+                    onChange={(e) => setNewSchedule({...newSchedule, location: e.target.value})}
+                    placeholder="e.g., Library, Room 205, etc."
                   />
                 </div>
                 <div>
-                  <Label htmlFor="day">Day</Label>
-                  <Select value={newSchedule.day_of_week} onValueChange={(value) => setNewSchedule({...newSchedule, day_of_week: value})}>
+                  <Label htmlFor="instructor">With</Label>
+                  <Input
+                    id="instructor"
+                    value={newSchedule.instructor}
+                    onChange={(e) => setNewSchedule({...newSchedule, instructor: e.target.value})}
+                    placeholder="e.g., Study Group, Dr. Smith, etc."
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="type">Type</Label>
+                  <Select value={newSchedule.type} onValueChange={(value) => setNewSchedule({...newSchedule, type: value})}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {days.map((day) => (
-                        <SelectItem key={day.key} value={day.key}>
-                          {day.label}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="Lecture">Study</SelectItem>
+                      <SelectItem value="Tutorial">Meeting</SelectItem>
+                      <SelectItem value="Lab">Lab Session</SelectItem>
+                      <SelectItem value="Seminar">Personal</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="flex justify-end space-x-2">
+                  <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleAddSchedule}>
+                    Add Schedule
+                  </Button>
+                </div>
               </div>
-              <div>
-                <Label htmlFor="location">Location</Label>
-                <Input
-                  id="location"
-                  value={newSchedule.location}
-                  onChange={(e) => setNewSchedule({...newSchedule, location: e.target.value})}
-                  placeholder="e.g., SCI Building, Room 205"
-                />
-              </div>
-              <div>
-                <Label htmlFor="instructor">Instructor</Label>
-                <Input
-                  id="instructor"
-                  value={newSchedule.instructor}
-                  onChange={(e) => setNewSchedule({...newSchedule, instructor: e.target.value})}
-                  placeholder="e.g., Dr. Smith"
-                />
-              </div>
-              <div>
-                <Label htmlFor="type">Type</Label>
-                <Select value={newSchedule.type} onValueChange={(value) => setNewSchedule({...newSchedule, type: value})}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Lecture">Lecture</SelectItem>
-                    <SelectItem value="Tutorial">Tutorial</SelectItem>
-                    <SelectItem value="Lab">Lab</SelectItem>
-                    <SelectItem value="Seminar">Seminar</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex justify-end space-x-2">
-                <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleAddSchedule}>
-                  Add Schedule
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Schedule Cards */}
       <div className="space-y-4">
-        {currentSchedule.length > 0 ? (
-          currentSchedule.map((class_item) => (
-            <Card key={class_item.id} className="transition-shadow hover:shadow-md">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{class_item.course}</CardTitle>
-                  <Badge variant={getTypeColor(class_item.type)}>
-                    {class_item.type}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">{class_item.time}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm">{class_item.location}</span>
-                  </div>
+        {displayData.length > 0 ? (
+          displayData.map((item) => {
+            const scheduleType = getScheduleTypeBadge(item.type);
+            const TypeIcon = scheduleType.icon;
+
+            return (
+              <Card key={item.id} className="transition-shadow hover:shadow-md">
+                <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">
-                      {class_item.instructor}
-                    </span>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => {
-                          setEditSchedule(class_item);
-                          setIsEditDialogOpen(true);
-                        }}
-                      >
-                        <Pencil className="mr-1 h-3 w-3" />
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => {
-                          setDeleteScheduleId(class_item.id);
-                          setIsDeleteDialogOpen(true);
-                        }}
-                      >
-                        <Trash2 className="mr-1 h-3 w-3" />
-                        Delete
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-lg">{item.displaySubject}</CardTitle>
+                      <Badge variant={scheduleType.variant}>
+                        <TypeIcon className="h-3 w-3 mr-1" />
+                        {scheduleType.label}
+                      </Badge>
+                    </div>
+                    {'type' in item && item.type !== 'lecturer' && (
+                      <Badge variant={getTypeColor(item.type)}>
+                        {item.type}
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{item.displayTime}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm">{item.displayLocation}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">
+                        {item.displayInstructor}
+                      </span>
+                      <Button size="sm" variant="outline">
+                        <MapPin className="mr-2 h-3 w-3" />
+                        Navigate
                       </Button>
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))
+                </CardContent>
+              </Card>
+            );
+          })
         ) : (
           <Card>
             <CardContent className="text-center py-8">
               <Calendar className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-              <h3 className="text-lg font-semibold mb-2">No Classes Scheduled</h3>
+              <h3 className="text-lg font-semibold mb-2">No Schedules Found</h3>
               <p className="text-muted-foreground">
-                You have no classes scheduled for {days.find(d => d.key === selectedDay)?.label}.
+                {viewMode === "all" 
+                  ? `You have no schedules for ${days.find(d => d.key === selectedDay)?.label}.`
+                  : `No ${viewMode} schedules found for ${days.find(d => d.key === selectedDay)?.label}.`
+                }
               </p>
+              {viewMode === "personal" && (
+                <Button 
+                  className="mt-4" 
+                  onClick={() => setIsAddDialogOpen(true)}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Personal Schedule
+                </Button>
+              )}
             </CardContent>
           </Card>
         )}
       </div>
 
-      {/* Edit Schedule Dialog */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Schedule</DialogTitle>
-            <DialogDescription>
-              Update your class details
-            </DialogDescription>
-          </DialogHeader>
-          {editSchedule && (
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="edit-course">Course Name</Label>
-                <Input
-                  id="edit-course"
-                  value={editSchedule.course}
-                  onChange={(e) => setEditSchedule({ ...editSchedule, course: e.target.value })}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="edit-time">Time</Label>
-                  <Input
-                    id="edit-time"
-                    value={editSchedule.time}
-                    onChange={(e) => setEditSchedule({ ...editSchedule, time: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="edit-day">Day</Label>
-                  <Select value={editSchedule.day_of_week} onValueChange={(value) => setEditSchedule({ ...editSchedule, day_of_week: value })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {days.map((day) => (
-                        <SelectItem key={day.key} value={day.key}>
-                          {day.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="edit-location">Location</Label>
-                <Input
-                  id="edit-location"
-                  value={editSchedule.location}
-                  onChange={(e) => setEditSchedule({ ...editSchedule, location: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="edit-instructor">Instructor</Label>
-                <Input
-                  id="edit-instructor"
-                  value={editSchedule.instructor}
-                  onChange={(e) => setEditSchedule({ ...editSchedule, instructor: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="edit-type">Type</Label>
-                <Select value={editSchedule.type} onValueChange={(value) => setEditSchedule({ ...editSchedule, type: value })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Lecture">Lecture</SelectItem>
-                    <SelectItem value="Tutorial">Tutorial</SelectItem>
-                    <SelectItem value="Lab">Lab</SelectItem>
-                    <SelectItem value="Seminar">Seminar</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex justify-end space-x-2">
-                <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleEditSchedule}>
-                  Save Changes
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Schedule</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete this schedule? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end space-x-2 mt-4">
-            <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleDeleteSchedule}>
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Quick Actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Button variant="outline">Export Schedule</Button>
         <Button variant="outline">Add to Calendar</Button>
-        <Button variant="outline" onClick={() => setIsStudyRoomDialogOpen(true)}>
-          Find Study Rooms
-        </Button>
+        <Button variant="outline">Find Study Rooms</Button>
         <Button variant="outline">Set Reminders</Button>
       </div>
-
-      {/* Study Room Dialog */}
-      <StudyRoomDialog open={isStudyRoomDialogOpen} onOpenChange={setIsStudyRoomDialogOpen}>
-        <StudyRoomDialogContent className="w-full max-w-md mx-auto rounded-lg shadow-lg p-4">
-          <StudyRoomDialogHeader>
-            <StudyRoomDialogTitle>Available Study Rooms</StudyRoomDialogTitle>
-          </StudyRoomDialogHeader>
-          <div className="space-y-4 mt-2">
-            {studyRooms.map((room, idx) => (
-              <Card key={idx}>
-                <CardHeader>
-                  <CardTitle className="text-base">{room.name}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs text-muted-foreground">{room.location}</span>
-                    <span className="text-xs">Capacity: {room.capacity}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-          <div className="flex justify-end mt-4">
-            <Button variant="outline" onClick={() => setIsStudyRoomDialogOpen(false)}>
-              Close
-            </Button>
-          </div>
-        </StudyRoomDialogContent>
-      </StudyRoomDialog>
     </div>
   );
 };
