@@ -138,10 +138,6 @@ const FacultyDirectory = () => {
               </div>
               <div className="flex gap-2 mt-4">
                 <Button size="sm" variant="outline">
-                  <MapPin className="mr-2 h-3 w-3" />
-                  Find Office
-                </Button>
-                <Button size="sm" variant="outline">
                   <Clock className="mr-2 h-3 w-3" />
                   Schedule Meeting
                 </Button>
