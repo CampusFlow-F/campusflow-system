@@ -25,7 +25,7 @@ dist-ssr
 *.env
 
 
-# Environment secrets
+# Environment secrets 
 .env
 .env.*
 !.env.example
