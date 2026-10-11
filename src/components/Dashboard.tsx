@@ -15,7 +15,8 @@ import {
   Navigation,
   Bell,
   MessageSquare,
-  FileText
+  FileText,
+  User
 } from "lucide-react";
 
 interface UpcomingClass {
@@ -63,12 +64,15 @@ const Dashboard = () => {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>([]);
   const [updates, setUpdates] = useState<Update[]>([]);
-  const [studentClass, setStudentClass] = useState<string>("");
+  const [studentClass, setStudentClass] = useState<string>("General");
   const [libraryCapacity, setLibraryCapacity] = useState({
     current: 0,
     total: 315,
     availableRooms: 0
   });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string>("");
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -83,97 +87,178 @@ const Dashboard = () => {
   }, []);
 
   const fetchData = async () => {
-    const { data} = await supabase.auth.getUser();
-    if (!data ) return;
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setError("User not authenticated");
+        return;
+      }
 
-    // Get student's class
-    const { data: studentData } = await supabase
-      .from('students')
-      .select('class')
-      .eq('id', user.id)
-      .single();
+      console.log("Fetching data for user:", user.id);
 
-    if (studentData) {
-      setStudentClass(studentData.class);
-      await Promise.all([
-        fetchUpcomingClasses(studentData.class),
-        fetchAssignments(studentData.class),
-        fetchStudyMaterials(studentData.class),
-        fetchUpdates(studentData.class),
-        fetchLibraryStatus()
-      ]);
+      // Get user profile to check role and get name
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('full_name, role, department')
+        .eq('id', user.id)
+        .single();
+
+      if (profileError) {
+        console.error("Error fetching profile:", profileError);
+        setError("Could not load user profile");
+        return;
+      }
+
+      if (profileData) {
+        setUserName(profileData.full_name || "Student");
+        
+        // If user is a lecturer, redirect or show error
+        if (profileData.role === 'lecturer') {
+          setError("This appears to be a lecturer account. Please use the lecturer dashboard.");
+          return;
+        }
+
+        // Use department as class, or default to "General"
+        if (profileData.department) {
+          setStudentClass(profileData.department);
+        }
+
+        // Fetch all data without filtering by class first to see what's available
+        await Promise.all([
+          fetchUpcomingClasses(profileData.department),
+          fetchAssignments(profileData.department),
+          fetchStudyMaterials(profileData.department),
+          fetchUpdates(profileData.department),
+          fetchLibraryStatus()
+        ]);
+      }
+    } catch (error) {
+      console.error("Error in fetchData:", error);
+      setError("Failed to load dashboard data");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const fetchUpcomingClasses = async (studentClass: string) => {
-    const today = new Date();
-    const dayOfWeek = today.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-    
-    const { data, error } = await supabase
-      .from("timetable")
-      .select("*")
-      .eq("class", studentClass)
-      .eq("day_of_week", dayOfWeek)
-      .order("start_time");
+  const fetchUpcomingClasses = async (studentClass?: string) => {
+    try {
+      const today = new Date();
+      const dayOfWeek = today.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+      
+      console.log("Fetching classes for:", studentClass, "on", dayOfWeek);
+      
+      let query = supabase
+        .from("timetable")
+        .select("*")
+        .eq("day_of_week", dayOfWeek)
+        .order("start_time");
 
-    if (error) {
-      console.error("Error fetching upcoming classes:", error);
-      return;
+      // If we have a class, filter by it, otherwise get all classes for today
+      if (studentClass) {
+        query = query.eq("class", studentClass);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error("Error fetching upcoming classes:", error);
+        return;
+      }
+
+      console.log("Found timetable entries:", data);
+
+      // Filter classes that are still upcoming today
+      const currentTimeString = today.toTimeString().slice(0, 5);
+      const upcoming = data?.filter(classItem => classItem.start_time > currentTimeString) || [];
+      
+      setUpcomingClasses(upcoming.slice(0, 3));
+    } catch (error) {
+      console.error("Error in fetchUpcomingClasses:", error);
     }
-
-    // Filter classes that are still upcoming today
-    const currentTimeString = today.toTimeString().slice(0, 5);
-    const upcoming = data?.filter(classItem => classItem.start_time > currentTimeString) || [];
-    
-    setUpcomingClasses(upcoming.slice(0, 3));
   };
 
-  const fetchAssignments = async (studentClass: string) => {
-    const { data, error } = await supabase
-      .from("assignments")
-      .select("*")
-      .eq("class", studentClass)
-      .order("created_at", { ascending: false })
-      .limit(5);
+  const fetchAssignments = async (studentClass?: string) => {
+    try {
+      let query = supabase
+        .from("assignments")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(5);
 
-    if (error) {
-      console.error("Error fetching assignments:", error);
-      return;
+      // If we have a class, filter by it
+      if (studentClass) {
+        query = query.eq("class", studentClass);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error("Error fetching assignments:", error);
+        return;
+      }
+
+      console.log("Found assignments:", data);
+      setAssignments(data || []);
+    } catch (error) {
+      console.error("Error in fetchAssignments:", error);
     }
-
-    setAssignments(data || []);
   };
 
-  const fetchStudyMaterials = async (studentClass: string) => {
-    const { data, error } = await supabase
-      .from("study_materials")
-      .select("*")
-      .eq("class", studentClass)
-      .order("created_at", { ascending: false })
-      .limit(5);
+  const fetchStudyMaterials = async (studentClass?: string) => {
+    try {
+      let query = supabase
+        .from("study_materials")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(5);
 
-    if (error) {
-      console.error("Error fetching study materials:", error);
-      return;
+      // If we have a class, filter by it
+      if (studentClass) {
+        query = query.eq("class", studentClass);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error("Error fetching study materials:", error);
+        return;
+      }
+
+      console.log("Found study materials:", data);
+      setStudyMaterials(data || []);
+    } catch (error) {
+      console.error("Error in fetchStudyMaterials:", error);
     }
-
-    setStudyMaterials(data || []);
   };
 
-  const fetchUpdates = async (studentClass: string) => {
-    const { data, error } = await supabase
-      .from("updates")
-      .select("*")
-      .or(`target_class.eq.${studentClass},target_class.is.null,target_class.eq.all`)
-      .order("created_at", { ascending: false })
-      .limit(4);
+  const fetchUpdates = async (studentClass?: string) => {
+    try {
+      let query = supabase
+        .from("updates")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(4);
 
-    if (error) {
-      console.error("Error fetching updates:", error);
-      return;
+      // If we have a class, filter for class-specific or general updates
+      if (studentClass) {
+        query = query.or(`target_class.eq.${studentClass},target_class.is.null,target_class.eq.all`);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error("Error fetching updates:", error);
+        return;
+      }
+
+      console.log("Found updates:", data);
+      setUpdates(data || []);
+    } catch (error) {
+      console.error("Error in fetchUpdates:", error);
     }
-
-    setUpdates(data || []);
   };
 
   const fetchLibraryStatus = async () => {
@@ -243,15 +328,43 @@ const Dashboard = () => {
     }
   ];
 
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-center items-center py-12">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading dashboard...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardContent className="text-center py-8">
+            <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+            <h3 className="text-lg font-semibold mb-2">Error Loading Dashboard</h3>
+            <p className="text-muted-foreground mb-4">{error}</p>
+            <Button onClick={fetchData}>Try Again</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Welcome Section */}
       <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6 rounded-lg">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold mb-2">Welcome Back, Student!</h1>
+            <h1 className="text-2xl md:text-3xl font-bold mb-2">Welcome Back, {userName}!</h1>
             <p className="text-blue-100 mb-2">
-              {studentClass && `Class: ${studentClass}`}
+              {studentClass && `Department: ${studentClass}`}
             </p>
             <p className="text-blue-100 mb-4 md:mb-0">
               {currentTime.toLocaleDateString('en-US', { 
@@ -341,7 +454,7 @@ const Dashboard = () => {
                     </div>
                     <h4 className="font-medium mt-1">{classItem.subject}</h4>
                     <p className="text-sm text-muted-foreground">
-                      {classItem.room}
+                      {classItem.room} • {classItem.class}
                     </p>
                   </div>
                   <Button size="sm" variant="outline">
@@ -353,7 +466,7 @@ const Dashboard = () => {
             ) : (
               <div className="text-center py-8 text-muted-foreground">
                 <Calendar className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>No more classes scheduled for today</p>
+                <p>No classes scheduled for today</p>
               </div>
             )}
           </CardContent>

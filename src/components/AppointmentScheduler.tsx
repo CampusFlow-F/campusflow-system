@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { Tables } from "@/integrations/supabase/types";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 type Appointment = Tables<"appointments">;
 
@@ -24,6 +24,8 @@ const AppointmentScheduler = () => {
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedTime, setSelectedTime] = useState("");
   const [purpose, setPurpose] = useState("");
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deleteAppointmentId, setDeleteAppointmentId] = useState<string | null>(null);
 
   const services = [
     { id: "faculty", name: "Faculty Meeting", description: "Meet with professors and lecturers" },
@@ -137,6 +139,38 @@ const AppointmentScheduler = () => {
       fetchAppointments();
     } catch (error) {
       console.error('Error rescheduling appointment:', error);
+    }
+  };
+
+  const handleDeleteAppointment = async () => {
+    if (!deleteAppointmentId || !user) return;
+
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .delete()
+        .eq('id', deleteAppointmentId)
+        .eq('user_id', user.id);
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to delete appointment",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Success",
+        description: "Appointment deleted successfully!",
+      });
+
+      setIsDeleteDialogOpen(false);
+      setDeleteAppointmentId(null);
+      fetchAppointments();
+    } catch (error) {
+      console.error('Error deleting appointment:', error);
     }
   };
 
@@ -264,6 +298,16 @@ const AppointmentScheduler = () => {
                     >
                       Reschedule
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => {
+                        setDeleteAppointmentId(appointment.id as string);
+                        setIsDeleteDialogOpen(true);
+                      }}
+                    >
+                      Delete
+                    </Button>
                   </div>
                 </div>
               ))
@@ -279,6 +323,26 @@ const AppointmentScheduler = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Delete Appointment Dialog */}
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Appointment</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this appointment? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end space-x-2 mt-4">
+            <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteAppointment}>
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
