@@ -81,8 +81,8 @@ const GoogleMap = ({ center, zoom = 15, markers = [] }: GoogleMapProps) => {
     }
 
     const script = document.createElement('script');
-    // Replace the API key with env variable in production
-    script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyDFoCMVMXy7OpiF9VkM6Lb2oKpl2oeAv9k&libraries=places`;
+    // Use the API key from environment variable for security
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY}&libraries=places`;
     script.async = true;
     script.defer = true;
     script.onload = initializeMap;
