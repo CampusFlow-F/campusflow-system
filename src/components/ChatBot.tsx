@@ -40,7 +40,43 @@ export default function CampusFlowChatBot() {
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) return JSON.parse(saved) as Message[];
+      if (saved) {
+        let parsed: any = JSON.parse(saved);
+        let migrated = false;
+        // Migrate legacy messages with Date objects to ISO strings
+        if (Array.isArray(parsed)) {
+          parsed = parsed.map((msg) => {
+            if (
+              msg.timestamp &&
+              typeof msg.timestamp !== "string" &&
+              (msg.timestamp instanceof Date || (typeof msg.timestamp === "object" && msg.timestamp.toISOString))
+            ) {
+              migrated = true;
+              return {
+                ...msg,
+                timestamp: new Date(msg.timestamp).toISOString(),
+              };
+            }
+            // If timestamp is a number (e.g., ms since epoch), convert to ISO
+            if (
+              msg.timestamp &&
+              typeof msg.timestamp === "number"
+            ) {
+              migrated = true;
+              return {
+                ...msg,
+                timestamp: new Date(msg.timestamp).toISOString(),
+              };
+            }
+            // Otherwise, assume it's already an ISO string
+            return msg;
+          });
+        }
+        if (migrated) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+        }
+        return parsed as Message[];
+      }
     } catch (e) {
       // ignore
     }
